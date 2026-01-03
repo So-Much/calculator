@@ -24,6 +24,10 @@ XLSX.utils.book_append_sheet(workbook, accountSheet, 'account');
 const dataSheet = XLSX.utils.json_to_sheet([]);
 XLSX.utils.book_append_sheet(workbook, dataSheet, 'data');
 
+// Create game_sessions sheet with headers (empty for now)
+const gameSessionsSheet = XLSX.utils.json_to_sheet([]);
+XLSX.utils.book_append_sheet(workbook, gameSessionsSheet, 'game_sessions');
+
 // Write file
 XLSX.writeFile(workbook, excelFile);
 console.log(`Excel file created at: ${excelFile}`);

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import LoginForm from '@/components/LoginForm';
-import Counter from '@/components/Counter';
+import GameMenu from '@/components/GameMenu';
 
 export default function Home() {
   const [accountId, setAccountId] = useState<number | null>(null);
@@ -29,5 +29,5 @@ export default function Home() {
     return <LoginForm onLogin={handleLogin} />;
   }
 
-  return <Counter accountId={accountId} onLogout={handleLogout} />;
+  return <GameMenu accountId={accountId} onLogout={handleLogout} />;
 }

@@ -52,7 +52,26 @@ function readExcelFile() {
 
 // Helper function to write Excel file
 function writeExcelFile(workbook: XLSX.WorkBook) {
-  XLSX.writeFile(workbook, EXCEL_FILE_PATH);
+  try {
+    // Ensure data directory exists
+    const dataDir = path.dirname(EXCEL_FILE_PATH);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    
+    // Write to buffer first, then write to file (more reliable)
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    fs.writeFileSync(EXCEL_FILE_PATH, buffer);
+  } catch (error) {
+    console.error('Error writing Excel file:', error);
+    // Fallback to XLSX.writeFile
+    try {
+      XLSX.writeFile(workbook, EXCEL_FILE_PATH);
+    } catch (fallbackError) {
+      console.error('Fallback write also failed:', fallbackError);
+      throw new Error(`Cannot save file ${EXCEL_FILE_PATH}. Make sure the file is not open in another application.`);
+    }
+  }
 }
 
 // GET: Get all accounts or find account
