@@ -5,10 +5,6 @@ import * as path from 'path';
 
 const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1hPkAlkmDIUUzTisBxPijxHKh_aIvACyn6nUqmOPro3o';
 
-console.log('[Google Sheets] SPREADSHEET_ID:', SPREADSHEET_ID);
-console.log('[Google Sheets] GOOGLE_SERVICE_ACCOUNT_EMAIL:', process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? 'SET' : 'NOT SET');
-console.log('[Google Sheets] GOOGLE_PRIVATE_KEY:', process.env.GOOGLE_PRIVATE_KEY ? `SET (length: ${process.env.GOOGLE_PRIVATE_KEY.length})` : 'NOT SET');
-
 // Initialize auth
 function getAuth() {
   console.log('[Google Sheets] Initializing authentication...');
