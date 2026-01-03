@@ -7,8 +7,14 @@ const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '1hPkAlkmDIUU
 
 // Initialize auth
 function getAuth() {
+  console.log('[Google Sheets] Initializing authentication...');
+  
   // Option 1: Use environment variables
   if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+    console.log('[Google Sheets] Using environment variables for auth');
+    console.log('[Google Sheets] Service Account Email:', process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
+    console.log('[Google Sheets] Private Key length:', process.env.GOOGLE_PRIVATE_KEY?.length || 0);
+    
     return new JWT({
       email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
       key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
@@ -17,7 +23,7 @@ function getAuth() {
   }
 
   // Option 2: Use JSON file (for development)
-  // Try multiple possible filenames
+  console.log('[Google Sheets] Environment variables not found, trying JSON file...');
   const possiblePaths = [
     path.join(process.cwd(), 'data', 'google-credentials.json'),
     path.join(process.cwd(), 'data', 'hi-garment-synch-data-a60452bc4e37.json'),
@@ -25,6 +31,7 @@ function getAuth() {
   
   for (const credentialsPath of possiblePaths) {
     if (fs.existsSync(credentialsPath)) {
+      console.log('[Google Sheets] Found credentials file:', credentialsPath);
       const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf-8'));
       return new JWT({
         email: credentials.client_email,
@@ -34,77 +41,129 @@ function getAuth() {
     }
   }
 
+  console.error('[Google Sheets] No credentials found!');
   throw new Error('Google Sheets credentials not found. Please set environment variables or place google-credentials.json in data folder.');
 }
 
 // Get or create sheet by name
 export async function getSheet(sheetName: string) {
-  const auth = getAuth();
-  const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
-  
-  await doc.loadInfo();
-  
-  let sheet = doc.sheetsByTitle[sheetName];
-  
-  if (!sheet) {
-    // Create sheet if it doesn't exist
-    sheet = await doc.addSheet({ title: sheetName, headerValues: [] });
+  try {
+    console.log(`[Google Sheets] Getting sheet: "${sheetName}"`);
+    console.log(`[Google Sheets] Spreadsheet ID: ${SPREADSHEET_ID}`);
+    
+    const auth = getAuth();
+    const doc = new GoogleSpreadsheet(SPREADSHEET_ID, auth);
+    
+    console.log(`[Google Sheets] Loading spreadsheet info...`);
+    await doc.loadInfo();
+    console.log(`[Google Sheets] Spreadsheet loaded: "${doc.title}"`);
+    
+    let sheet = doc.sheetsByTitle[sheetName];
+    
+    if (!sheet) {
+      console.log(`[Google Sheets] Sheet "${sheetName}" not found, creating new sheet...`);
+      sheet = await doc.addSheet({ title: sheetName });
+      console.log(`[Google Sheets] Sheet "${sheetName}" created successfully`);
+    } else {
+      console.log(`[Google Sheets] Sheet "${sheetName}" found, rowCount: ${sheet.rowCount}`);
+    }
+    
+    return sheet;
+  } catch (error) {
+    console.error(`[Google Sheets] Error getting sheet "${sheetName}":`, error);
+    if (error instanceof Error) {
+      console.error(`[Google Sheets] Error message: ${error.message}`);
+      console.error(`[Google Sheets] Error stack: ${error.stack}`);
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to access Google Sheet: ${errorMessage}`);
   }
-  
-  return sheet;
 }
 
 // Get all rows from a sheet
 export async function getSheetRows<T extends Record<string, any> = Record<string, any>>(sheetName: string): Promise<T[]> {
-  const sheet = await getSheet(sheetName);
-  
-  // Check if sheet has any data rows first
-  if (sheet.rowCount === 0) {
-    return [];
-  }
-  
-  // Try to load header row
   try {
-    await sheet.loadHeaderRow();
-  } catch (error) {
-    // Sheet exists but has no headers yet, return empty array
-    return [];
-  }
+    console.log(`[Google Sheets] Getting rows from sheet: "${sheetName}"`);
+    const sheet = await getSheet(sheetName);
+    
+    // Check if sheet has any data rows first
+    if (sheet.rowCount === 0) {
+      console.log(`[Google Sheets] Sheet "${sheetName}" is empty (rowCount = 0)`);
+      return [];
+    }
+    
+    console.log(`[Google Sheets] Sheet "${sheetName}" has ${sheet.rowCount} rows, loading headers...`);
+    
+    // Try to load header row
+    try {
+      await sheet.loadHeaderRow();
+      console.log(`[Google Sheets] Headers loaded:`, sheet.headerValues);
+    } catch (error) {
+      // Sheet exists but has no headers yet, return empty array
+      console.log(`[Google Sheets] Sheet "${sheetName}" has no headers yet`);
+      return [];
+    }
   
-  const rows = await sheet.getRows();
-  if (rows.length === 0) {
-    return [];
-  }
-  
-  return rows.map(row => {
-    const data = row.toObject() as Record<string, any>;
-    // Convert string numbers to numbers where appropriate
-    Object.keys(data).forEach(key => {
-      const value = data[key];
-      if (typeof value === 'string' && /^\d+$/.test(value)) {
-        // Check if it's a numeric ID field
-        if (key === 'id' || key.endsWith('Id')) {
-          data[key] = parseInt(value, 10);
+    const rows = await sheet.getRows();
+    console.log(`[Google Sheets] Retrieved ${rows.length} data rows from sheet "${sheetName}"`);
+    
+    if (rows.length === 0) {
+      return [];
+    }
+    
+    const result = rows.map(row => {
+      const data = row.toObject() as Record<string, any>;
+      // Convert string numbers to numbers where appropriate
+      Object.keys(data).forEach(key => {
+        const value = data[key];
+        if (typeof value === 'string' && /^\d+$/.test(value)) {
+          // Check if it's a numeric ID field
+          if (key === 'id' || key.endsWith('Id')) {
+            data[key] = parseInt(value, 10);
+          }
         }
-      }
+      });
+      return data as T;
     });
-    return data as T;
-  });
+    
+    console.log(`[Google Sheets] Successfully parsed ${result.length} rows from sheet "${sheetName}"`);
+    return result;
+  } catch (error) {
+    console.error(`[Google Sheets] Error getting rows from sheet "${sheetName}":`, error);
+    throw error;
+  }
 }
 
 // Add row to a sheet
 export async function addSheetRow<T extends Record<string, any> = Record<string, any>>(sheetName: string, data: Partial<T>): Promise<void> {
-  const sheet = await getSheet(sheetName);
-  
-  // Ensure headers are loaded before adding row
   try {
-    await sheet.loadHeaderRow();
+    console.log(`[Google Sheets] Adding row to sheet: "${sheetName}"`);
+    console.log(`[Google Sheets] Row data:`, JSON.stringify(data, null, 2));
+    
+    const sheet = await getSheet(sheetName);
+    
+    // Ensure headers are loaded before adding row
+    try {
+      await sheet.loadHeaderRow();
+      console.log(`[Google Sheets] Headers loaded:`, sheet.headerValues);
+    } catch (error) {
+      // If headers don't exist, we can't add rows - this should have been set earlier
+      console.error(`[Google Sheets] Sheet "${sheetName}" has no headers!`);
+      throw new Error(`Sheet "${sheetName}" has no headers. Call setSheetHeaders first.`);
+    }
+    
+    console.log(`[Google Sheets] Adding row...`);
+    await sheet.addRow(data as Record<string, any>);
+    console.log(`[Google Sheets] Row added successfully to sheet "${sheetName}"`);
   } catch (error) {
-    // If headers don't exist, we can't add rows - this should have been set earlier
-    throw new Error(`Sheet "${sheetName}" has no headers. Call setSheetHeaders first.`);
+    console.error(`[Google Sheets] Error adding row to sheet "${sheetName}":`, error);
+    if (error instanceof Error) {
+      console.error(`[Google Sheets] Error message: ${error.message}`);
+      console.error(`[Google Sheets] Error stack: ${error.stack}`);
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to add row to sheet "${sheetName}": ${errorMessage}`);
   }
-  
-  await sheet.addRow(data as Record<string, any>);
 }
 
 // Update row in a sheet by index
@@ -187,7 +246,22 @@ export async function deleteSheetRowById(sheetName: string, idField: string, idV
 
 // Set header row for a sheet (use when creating new sheet)
 export async function setSheetHeaders(sheetName: string, headers: string[]): Promise<void> {
-  const sheet = await getSheet(sheetName);
-  await sheet.setHeaderRow(headers);
+  try {
+    console.log(`[Google Sheets] Setting headers for sheet: "${sheetName}"`);
+    console.log(`[Google Sheets] Headers:`, headers);
+    
+    const sheet = await getSheet(sheetName);
+    await sheet.setHeaderRow(headers);
+    
+    console.log(`[Google Sheets] Headers set successfully for sheet "${sheetName}"`);
+  } catch (error) {
+    console.error(`[Google Sheets] Error setting headers for sheet "${sheetName}":`, error);
+    if (error instanceof Error) {
+      console.error(`[Google Sheets] Error message: ${error.message}`);
+      console.error(`[Google Sheets] Error stack: ${error.stack}`);
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to set headers for sheet "${sheetName}": ${errorMessage}`);
+  }
 }
 
