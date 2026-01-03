@@ -270,12 +270,15 @@ export async function loadGameSessions(accountId: number, gameType: string): Pro
   }
   
   // Fallback to localStorage
-  const sessions = getGameSessionsFromStorage(accountId, gameType);
-  return sessions.map(s => ({
-    id: s.id,
-    sessionName: s.sessionName,
-    lastUpdated: s.lastUpdated,
-  } as any));
+  if (typeof window !== 'undefined') {
+    const sessions = getGameSessionsFromStorage(accountId, gameType);
+    return sessions.map(s => ({
+      id: s.id,
+      sessionName: s.sessionName,
+      lastUpdated: s.lastUpdated,
+    })) as GameSession[];
+  }
+  return [];
 }
 
 export async function loadGameSession(sessionId: number): Promise<GameSession | null> {
@@ -300,24 +303,60 @@ export async function saveGameSession(
   accountId: number,
   gameType: string,
   sessionName: string,
-  setup: any,
-  players: any,
-  gameHistory: any,
+  setup: unknown,
+  players: unknown,
+  gameHistory: unknown,
   sessionId?: number
 ): Promise<GameSession> {
   const now = new Date().toISOString();
+  
+  // Prepare data
+  const setupStr = typeof setup === 'string' ? setup : JSON.stringify(setup);
+  const playersStr = typeof players === 'string' ? players : JSON.stringify(players);
+  const gameHistoryStr = typeof gameHistory === 'string' ? gameHistory : JSON.stringify(gameHistory);
+
+  // Try API first
+  try {
+    const response = await fetch(`${API_BASE}/game-sessions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId,
+        gameType,
+        sessionName,
+        setup: setupStr,
+        players: playersStr,
+        gameHistory: gameHistoryStr,
+        sessionId: sessionId || undefined,
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      return data.session;
+    }
+  } catch (error) {
+    console.warn('API not available, using localStorage');
+  }
+  
+  // Fallback to localStorage
+  if (typeof window === 'undefined') {
+    throw new Error('Unable to save game session: window is undefined');
+  }
+
   let session: GameSession;
   
-  // If updating existing session, load it first to get createdAt
   if (sessionId) {
-    const existing = await loadGameSession(sessionId);
+    // Updating existing session
+    const existing = getGameSessionFromStorage(sessionId);
     if (existing) {
       session = {
         ...existing,
         sessionName,
-        setup: typeof setup === 'string' ? setup : JSON.stringify(setup),
-        players: typeof players === 'string' ? players : JSON.stringify(players),
-        gameHistory: typeof gameHistory === 'string' ? gameHistory : JSON.stringify(gameHistory),
+        setup: setupStr,
+        players: playersStr,
+        gameHistory: gameHistoryStr,
         lastUpdated: now,
       };
     } else {
@@ -329,9 +368,9 @@ export async function saveGameSession(
         accountId,
         gameType,
         sessionName,
-        setup: typeof setup === 'string' ? setup : JSON.stringify(setup),
-        players: typeof players === 'string' ? players : JSON.stringify(players),
-        gameHistory: typeof gameHistory === 'string' ? gameHistory : JSON.stringify(gameHistory),
+        setup: setupStr,
+        players: playersStr,
+        gameHistory: gameHistoryStr,
         lastUpdated: now,
         createdAt: now,
       };
@@ -345,45 +384,16 @@ export async function saveGameSession(
       accountId,
       gameType,
       sessionName,
-      setup: typeof setup === 'string' ? setup : JSON.stringify(setup),
-      players: typeof players === 'string' ? players : JSON.stringify(players),
-      gameHistory: typeof gameHistory === 'string' ? gameHistory : JSON.stringify(gameHistory),
+      setup: setupStr,
+      players: playersStr,
+      gameHistory: gameHistoryStr,
       lastUpdated: now,
       createdAt: now,
     };
   }
 
-  try {
-    const response = await fetch(`${API_BASE}/game-sessions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        accountId,
-        gameType,
-        sessionName,
-        setup: session.setup,
-        players: session.players,
-        gameHistory: session.gameHistory,
-        sessionId: session.id,
-      }),
-    });
-    if (response.ok) {
-      const data = await response.json();
-      return data.session;
-    }
-  } catch (error) {
-    console.warn('API not available, using localStorage');
-  }
-  
-  // Fallback to localStorage
-  if (typeof window !== 'undefined') {
-    saveGameSessionToStorage(session);
-    return session;
-  }
-  
-  throw new Error('Unable to save game session');
+  saveGameSessionToStorage(session);
+  return session;
 }
 
 export async function deleteGameSession(sessionId: number): Promise<void> {

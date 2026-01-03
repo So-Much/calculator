@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { loadGameSessions, saveGameSession, loadGameSession, deleteGameSession } from '@/lib/excel-utils';
 
 interface Player {
   id: number;
@@ -71,13 +72,8 @@ export default function TienLenCalculator({ accountId, onBack }: TienLenCalculat
 
   const loadSessions = useCallback(async () => {
     try {
-      const response = await fetch(
-        `/api/excel/game-sessions?accountId=${accountId}&gameType=tien-len`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setSavedSessions(data.sessions || []);
-      }
+      const sessions = await loadGameSessions(accountId, 'tien-len');
+      setSavedSessions(sessions);
     } catch (error) {
       console.error('Error loading sessions:', error);
     }
@@ -89,27 +85,18 @@ export default function TienLenCalculator({ accountId, onBack }: TienLenCalculat
     try {
       const name = sessionName || `Game ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`;
       
-      const response = await fetch('/api/excel/game-sessions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          accountId,
-          gameType: 'tien-len',
-          sessionName: name,
-          setup,
-          players,
-          gameHistory,
-          sessionId: currentSessionId,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setCurrentSessionId(data.session.id);
-        await loadSessions();
-      }
+      const session = await saveGameSession(
+        accountId,
+        'tien-len',
+        name,
+        setup,
+        players,
+        gameHistory,
+        currentSessionId || undefined
+      );
+      
+      setCurrentSessionId(session.id);
+      await loadSessions();
     } catch (error) {
       console.error('Error saving session:', error);
     }
@@ -165,16 +152,11 @@ export default function TienLenCalculator({ accountId, onBack }: TienLenCalculat
 
   const deleteSession = async (sessionId: number) => {
     try {
-      const response = await fetch(
-        `/api/excel/game-sessions?accountId=${accountId}&sessionId=${sessionId}`,
-        { method: 'DELETE' }
-      );
-      if (response.ok) {
-        await loadSessions();
-        if (currentSessionId === sessionId) {
-          setCurrentSessionId(null);
-          resetGame();
-        }
+      await deleteGameSession(sessionId);
+      await loadSessions();
+      if (currentSessionId === sessionId) {
+        setCurrentSessionId(null);
+        resetGame();
       }
     } catch (error) {
       console.error('Error deleting session:', error);

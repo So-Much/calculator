@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { loadGameSessions, saveGameSession, loadGameSession, deleteGameSession } from '@/lib/excel-utils';
 
 interface Player {
   id: number;
@@ -74,13 +75,8 @@ export default function XiDachCalculator({ accountId, onBack }: XiDachCalculator
 
   const loadSessions = useCallback(async () => {
     try {
-      const response = await fetch(
-        `/api/excel/game-sessions?accountId=${accountId}&gameType=xi-dach`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setSavedSessions(data.sessions || []);
-      }
+      const sessions = await loadGameSessions(accountId, 'xi-dach');
+      setSavedSessions(sessions);
     } catch (error) {
       console.error('Error loading sessions:', error);
     }
@@ -92,27 +88,18 @@ export default function XiDachCalculator({ accountId, onBack }: XiDachCalculator
     try {
       const name = sessionName || `Game ${new Date().toLocaleDateString('vi-VN')} ${new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`;
       
-      const response = await fetch('/api/excel/game-sessions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          accountId,
-          gameType: 'xi-dach',
-          sessionName: name,
-          setup: JSON.stringify(setup),
-          players: JSON.stringify(players),
-          gameHistory: JSON.stringify(gameHistory),
-          sessionId: currentSessionId,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setCurrentSessionId(data.session.id);
-        await loadSessions();
-      }
+      const session = await saveGameSession(
+        accountId,
+        'xi-dach',
+        name,
+        setup,
+        players,
+        gameHistory,
+        currentSessionId || undefined
+      );
+      
+      setCurrentSessionId(session.id);
+      await loadSessions();
     } catch (error) {
       console.error('Error saving session:', error);
     }
@@ -120,28 +107,23 @@ export default function XiDachCalculator({ accountId, onBack }: XiDachCalculator
 
   const loadSession = useCallback(async (sessionId: number) => {
     try {
-      const response = await fetch(
-        `/api/excel/game-sessions?accountId=${accountId}&sessionId=${sessionId}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.session) {
-          const session = data.session;
-          setSetup(JSON.parse(session.setup));
-          setPlayers(JSON.parse(session.players));
-          setGameHistory(JSON.parse(session.gameHistory));
-          setCurrentSessionId(session.id);
-          setShowSetup(false);
-          setIsCalculated(JSON.parse(session.gameHistory).length > 0);
-          
-          // Restore display values
-          const loadedPlayers = JSON.parse(session.players);
-          const newBetAmountDisplays: { [key: number]: string } = {};
-          loadedPlayers.forEach((p: Player) => {
-            newBetAmountDisplays[p.id] = formatNumber(p.betAmount);
-          });
-          setBetAmountDisplays(newBetAmountDisplays);
-        }
+      const session = await loadGameSession(sessionId);
+      if (session) {
+        setSetup(JSON.parse(session.setup));
+        const loadedPlayers = JSON.parse(session.players);
+        setPlayers(loadedPlayers);
+        const loadedHistory = JSON.parse(session.gameHistory);
+        setGameHistory(loadedHistory);
+        setCurrentSessionId(session.id);
+        setShowSetup(false);
+        setIsCalculated(loadedHistory.length > 0);
+        
+        // Restore display values
+        const newBetAmountDisplays: { [key: number]: string } = {};
+        loadedPlayers.forEach((p: Player) => {
+          newBetAmountDisplays[p.id] = formatNumber(p.betAmount);
+        });
+        setBetAmountDisplays(newBetAmountDisplays);
       }
     } catch (error) {
       console.error('Error loading session:', error);
@@ -150,16 +132,11 @@ export default function XiDachCalculator({ accountId, onBack }: XiDachCalculator
 
   const deleteSession = useCallback(async (sessionId: number) => {
     try {
-      const response = await fetch(
-        `/api/excel/game-sessions?accountId=${accountId}&sessionId=${sessionId}`,
-        { method: 'DELETE' }
-      );
-      if (response.ok) {
-        await loadSessions();
-        if (currentSessionId === sessionId) {
-          setCurrentSessionId(null);
-          resetGame();
-        }
+      await deleteGameSession(sessionId);
+      await loadSessions();
+      if (currentSessionId === sessionId) {
+        setCurrentSessionId(null);
+        resetGame();
       }
     } catch (error) {
       console.error('Error deleting session:', error);
