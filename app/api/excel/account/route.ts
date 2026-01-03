@@ -31,8 +31,9 @@ export async function GET(request: NextRequest) {
     }
   } catch (error) {
     console.error('Error reading accounts:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to read accounts' },
+      { error: 'Failed to read accounts', details: errorMessage },
       { status: 500 }
     );
   }
@@ -82,8 +83,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ account: newAccount }, { status: 201 });
   } catch (error) {
     console.error('Error creating account:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error details:', errorMessage);
     return NextResponse.json(
-      { error: 'Failed to create account' },
+      { error: 'Failed to create account', details: errorMessage },
       { status: 500 }
     );
   }

@@ -51,11 +51,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const dataArray = await getSheetRows<CounterData>(DATA_SHEET_NAME);
+    let dataArray = await getSheetRows<CounterData>(DATA_SHEET_NAME);
 
-    // Initialize headers if sheet is new
+    // Initialize headers if sheet is new (must be done before adding rows)
     if (dataArray.length === 0) {
       await setSheetHeaders(DATA_SHEET_NAME, ['id', 'accountId', 'count', 'lastUpdated']);
+      // Reload to ensure headers are set
+      dataArray = await getSheetRows<CounterData>(DATA_SHEET_NAME);
     }
 
     const now = new Date().toISOString();

@@ -73,14 +73,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
+    let sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
 
-    // Initialize headers if sheet is new
+    // Initialize headers if sheet is new (must be done before adding rows)
     if (sessions.length === 0) {
       await setSheetHeaders(GAME_SESSIONS_SHEET_NAME, [
         'id', 'accountId', 'gameType', 'sessionName', 'setup', 'players', 
         'gameHistory', 'lastUpdated', 'createdAt'
       ]);
+      // Reload to ensure headers are set
+      sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
     }
 
     const now = new Date().toISOString();

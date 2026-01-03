@@ -57,8 +57,25 @@ export async function getSheet(sheetName: string) {
 // Get all rows from a sheet
 export async function getSheetRows<T extends Record<string, any> = Record<string, any>>(sheetName: string): Promise<T[]> {
   const sheet = await getSheet(sheetName);
-  await sheet.loadHeaderRow();
+  
+  // Check if sheet has any data rows first
+  if (sheet.rowCount === 0) {
+    return [];
+  }
+  
+  // Try to load header row
+  try {
+    await sheet.loadHeaderRow();
+  } catch (error) {
+    // Sheet exists but has no headers yet, return empty array
+    return [];
+  }
+  
   const rows = await sheet.getRows();
+  if (rows.length === 0) {
+    return [];
+  }
+  
   return rows.map(row => {
     const data = row.toObject() as Record<string, any>;
     // Convert string numbers to numbers where appropriate
@@ -78,6 +95,15 @@ export async function getSheetRows<T extends Record<string, any> = Record<string
 // Add row to a sheet
 export async function addSheetRow<T extends Record<string, any> = Record<string, any>>(sheetName: string, data: Partial<T>): Promise<void> {
   const sheet = await getSheet(sheetName);
+  
+  // Ensure headers are loaded before adding row
+  try {
+    await sheet.loadHeaderRow();
+  } catch (error) {
+    // If headers don't exist, we can't add rows - this should have been set earlier
+    throw new Error(`Sheet "${sheetName}" has no headers. Call setSheetHeaders first.`);
+  }
+  
   await sheet.addRow(data as Record<string, any>);
 }
 
