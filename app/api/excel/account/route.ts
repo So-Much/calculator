@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSheetRows, addSheetRow, setSheetHeaders } from '@/lib/google-sheets';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as XLSX from 'xlsx';
 
 const ACCOUNT_SHEET_NAME = 'account';
 
@@ -9,46 +11,138 @@ export interface Account {
   password: string;
 }
 
+// Check if Google Sheets credentials are available
+async function hasGoogleSheetsCredentials(): Promise<boolean> {
+  try {
+    if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
+      return true;
+    }
+    
+    // Check for JSON file
+    const possiblePaths = [
+      path.join(process.cwd(), 'data', 'google-credentials.json'),
+      path.join(process.cwd(), 'data', 'hi-garment-synch-data-a60452bc4e37.json'),
+    ];
+    
+    for (const credentialsPath of possiblePaths) {
+      if (fs.existsSync(credentialsPath)) {
+        return true;
+      }
+    }
+    
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// Use Google Sheets
+async function getAccountsFromGoogleSheets(): Promise<Account[]> {
+  const { getSheetRows } = await import('@/lib/google-sheets');
+  return await getSheetRows<Account>(ACCOUNT_SHEET_NAME);
+}
+
+async function addAccountToGoogleSheets(account: Account): Promise<void> {
+  const { getSheetRows, addSheetRow, setSheetHeaders } = await import('@/lib/google-sheets');
+  const accounts = await getSheetRows<Account>(ACCOUNT_SHEET_NAME);
+  
+  if (accounts.length === 0) {
+    await setSheetHeaders(ACCOUNT_SHEET_NAME, ['id', 'username', 'password']);
+  }
+  
+  await addSheetRow(ACCOUNT_SHEET_NAME, account);
+}
+
+// Use file-based storage (Excel-like fallback)
+async function getAccountsFromFile(): Promise<Account[]> {
+  try {
+    const filePath = path.join(process.cwd(), 'data', 'database.xlsx');
+    
+    if (!fs.existsSync(filePath)) {
+      return [];
+    }
+    
+    const workbook = XLSX.readFile(filePath);
+    const sheet = workbook.Sheets[ACCOUNT_SHEET_NAME];
+    
+    if (!sheet) {
+      return [];
+    }
+    
+    return XLSX.utils.sheet_to_json<Account>(sheet);
+  } catch {
+    return [];
+  }
+}
+
+async function addAccountToFile(account: Account): Promise<void> {
+  try {
+    const filePath = path.join(process.cwd(), 'data', 'database.xlsx');
+    const dataDir = path.dirname(filePath);
+    
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    
+    let workbook;
+    if (fs.existsSync(filePath)) {
+      workbook = XLSX.readFile(filePath);
+    } else {
+      workbook = XLSX.utils.book_new();
+      const accountSheet = XLSX.utils.json_to_sheet<Account>([]);
+      XLSX.utils.book_append_sheet(workbook, accountSheet, ACCOUNT_SHEET_NAME);
+    }
+    
+    const sheet = workbook.Sheets[ACCOUNT_SHEET_NAME];
+    const accounts = sheet ? XLSX.utils.sheet_to_json<Account>(sheet) : [];
+    
+    accounts.push(account);
+    
+    const newSheet = XLSX.utils.json_to_sheet(accounts);
+    workbook.Sheets[ACCOUNT_SHEET_NAME] = newSheet;
+    XLSX.writeFile(workbook, filePath);
+  } catch (error) {
+    console.error('Error saving to file:', error);
+    throw error;
+  }
+}
+
 // GET: Get account by username and password, or get all accounts
 export async function GET(request: NextRequest) {
   try {
-    console.log('[API] GET /api/excel/account - Request received');
     const { searchParams } = new URL(request.url);
     const username = searchParams.get('username');
     const password = searchParams.get('password');
 
+    const hasSheets = await hasGoogleSheetsCredentials();
+    let accounts: Account[] = [];
+
+    try {
+      if (hasSheets) {
+        accounts = await getAccountsFromGoogleSheets();
+      } else {
+        accounts = await getAccountsFromFile();
+      }
+    } catch (error) {
+      // If Google Sheets fails, fallback to file
+      if (hasSheets) {
+        console.warn('Google Sheets failed, falling back to file storage');
+        accounts = await getAccountsFromFile();
+      }
+    }
+
     if (username && password) {
-      console.log(`[API] Finding account for username: ${username}`);
-      // Find specific account
-      const accounts = await getSheetRows<Account>(ACCOUNT_SHEET_NAME);
-      console.log(`[API] Found ${accounts.length} accounts`);
       const account = accounts.find(
         a => a.username === username && a.password === password
       );
-
-      if (account) {
-        console.log(`[API] Account found for username: ${username}`);
-      } else {
-        console.log(`[API] Account not found for username: ${username}`);
-      }
-
       return NextResponse.json({ account: account || null }, { status: 200 });
     } else {
-      console.log('[API] Getting all accounts');
-      // Get all accounts
-      const accounts = await getSheetRows<Account>(ACCOUNT_SHEET_NAME);
-      console.log(`[API] Returning ${accounts.length} accounts`);
       return NextResponse.json({ accounts }, { status: 200 });
     }
   } catch (error) {
-    console.error('[API] Error reading accounts:', error);
-    if (error instanceof Error) {
-      console.error('[API] Error message:', error.message);
-      console.error('[API] Error stack:', error.stack);
-    }
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error reading accounts:', error);
     return NextResponse.json(
-      { error: 'Failed to read accounts', details: errorMessage },
+      { error: 'Failed to read accounts' },
       { status: 500 }
     );
   }
@@ -57,40 +151,43 @@ export async function GET(request: NextRequest) {
 // POST: Create new account
 export async function POST(request: NextRequest) {
   try {
-    console.log('[API] POST /api/excel/account - Request received');
     const body = await request.json();
     const { username, password } = body;
 
-    console.log(`[API] Creating account for username: ${username}`);
-
     if (!username || !password) {
-      console.log('[API] Validation failed: username and password are required');
       return NextResponse.json(
         { error: 'username and password are required' },
         { status: 400 }
       );
     }
 
-    // Check if account already exists
-    console.log('[API] Checking if account already exists...');
-    const accounts = await getSheetRows<Account>(ACCOUNT_SHEET_NAME);
-    console.log(`[API] Current accounts count: ${accounts.length}`);
-    
+    const hasSheets = await hasGoogleSheetsCredentials();
+    let accounts: Account[] = [];
+
+    try {
+      if (hasSheets) {
+        accounts = await getAccountsFromGoogleSheets();
+      } else {
+        accounts = await getAccountsFromFile();
+      }
+    } catch {
+      if (hasSheets) {
+        console.warn('Google Sheets failed, falling back to file storage');
+        accounts = await getAccountsFromFile();
+      }
+    }
+
     const existingAccount = accounts.find(
       a => a.username === username && a.password === password
     );
 
     if (existingAccount) {
-      console.log(`[API] Account already exists for username: ${username}, returning existing account`);
       return NextResponse.json({ account: existingAccount }, { status: 200 });
     }
 
-    // Create new account
     const nextId = accounts.length > 0 
       ? Math.max(...accounts.map(a => a.id)) + 1 
       : 1;
-
-    console.log(`[API] Creating new account with ID: ${nextId}`);
 
     const newAccount: Account = {
       id: nextId,
@@ -98,28 +195,26 @@ export async function POST(request: NextRequest) {
       password,
     };
 
-    // Initialize headers if sheet is new
-    if (accounts.length === 0) {
-      console.log('[API] Sheet is empty, setting headers first...');
-      await setSheetHeaders(ACCOUNT_SHEET_NAME, ['id', 'username', 'password']);
-      console.log('[API] Headers set successfully');
+    try {
+      if (hasSheets) {
+        await addAccountToGoogleSheets(newAccount);
+      } else {
+        await addAccountToFile(newAccount);
+      }
+    } catch {
+      if (hasSheets) {
+        console.warn('Google Sheets failed, falling back to file storage');
+        await addAccountToFile(newAccount);
+      } else {
+        throw new Error('Failed to save account');
+      }
     }
-
-    console.log('[API] Adding new account row...');
-    await addSheetRow(ACCOUNT_SHEET_NAME, newAccount);
-    console.log('[API] Account created successfully');
 
     return NextResponse.json({ account: newAccount }, { status: 201 });
   } catch (error) {
-    console.error('[API] Error creating account:', error);
-    if (error instanceof Error) {
-      console.error('[API] Error message:', error.message);
-      console.error('[API] Error stack:', error.stack);
-    }
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[API] Error details:', errorMessage);
+    console.error('Error creating account:', error);
     return NextResponse.json(
-      { error: 'Failed to create account', details: errorMessage },
+      { error: 'Failed to create account' },
       { status: 500 }
     );
   }
