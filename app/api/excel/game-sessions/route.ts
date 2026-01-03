@@ -1,9 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import * as XLSX from 'xlsx';
-import * as fs from 'fs';
-import * as path from 'path';
+import { getSheetRows, addSheetRow, deleteSheetRowById, updateSheetRowById, setSheetHeaders } from '@/lib/google-sheets';
 
-const EXCEL_FILE_PATH = path.join(process.cwd(), 'data', 'database.xlsx');
 const GAME_SESSIONS_SHEET_NAME = 'game_sessions';
 
 export interface GameSession {
@@ -18,116 +15,42 @@ export interface GameSession {
   createdAt: string;
 }
 
-// Helper function to read Excel file
-function readExcelFile() {
-  const dataDir = path.dirname(EXCEL_FILE_PATH);
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  if (!fs.existsSync(EXCEL_FILE_PATH)) {
-    const workbook = XLSX.utils.book_new();
-    const accountSheet = XLSX.utils.json_to_sheet([]);
-    XLSX.utils.book_append_sheet(workbook, accountSheet, 'account');
-    
-    const dataSheet = XLSX.utils.json_to_sheet([]);
-    XLSX.utils.book_append_sheet(workbook, dataSheet, 'data');
-    
-    const gameSessionsSheet = XLSX.utils.json_to_sheet<GameSession>([]);
-    XLSX.utils.book_append_sheet(workbook, gameSessionsSheet, GAME_SESSIONS_SHEET_NAME);
-    
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    fs.writeFileSync(EXCEL_FILE_PATH, buffer);
-    return workbook;
-  }
-  
-  try {
-    const fileBuffer = fs.readFileSync(EXCEL_FILE_PATH);
-    return XLSX.read(fileBuffer, { type: 'buffer' });
-  } catch (error) {
-    console.error('Error reading Excel file:', error);
-    try {
-      return XLSX.readFile(EXCEL_FILE_PATH);
-    } catch (fallbackError) {
-      console.error('Fallback read also failed:', fallbackError);
-      throw new Error(`Cannot access file ${EXCEL_FILE_PATH}. Make sure the file is not open in another application.`);
-    }
-  }
-}
-
-// Helper function to write Excel file
-function writeExcelFile(workbook: XLSX.WorkBook) {
-  try {
-    const dataDir = path.dirname(EXCEL_FILE_PATH);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    fs.writeFileSync(EXCEL_FILE_PATH, buffer);
-  } catch (error) {
-    console.error('Error writing Excel file:', error);
-    try {
-      XLSX.writeFile(workbook, EXCEL_FILE_PATH);
-    } catch (fallbackError) {
-      console.error('Fallback write also failed:', fallbackError);
-      throw new Error(`Cannot save file ${EXCEL_FILE_PATH}. Make sure the file is not open in another application.`);
-    }
-  }
-}
-
 // GET: Get game sessions for an account
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
+    const { searchParams } = new URL(request.url);
     const accountId = searchParams.get('accountId');
     const gameType = searchParams.get('gameType');
     const sessionId = searchParams.get('sessionId');
 
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'accountId is required' },
-        { status: 400 }
-      );
-    }
-
-    const workbook = readExcelFile();
-    
-    // Ensure game_sessions sheet exists
-    if (!workbook.Sheets[GAME_SESSIONS_SHEET_NAME]) {
-      const gameSessionsSheet = XLSX.utils.json_to_sheet<GameSession>([]);
-      XLSX.utils.book_append_sheet(workbook, gameSessionsSheet, GAME_SESSIONS_SHEET_NAME);
-      writeExcelFile(workbook);
-    }
-
-    const sheet = workbook.Sheets[GAME_SESSIONS_SHEET_NAME];
-    
-    if (!sheet) {
-      return NextResponse.json({ sessions: [] }, { status: 200 });
-    }
-
-    const sessionsArray = XLSX.utils.sheet_to_json<GameSession>(sheet);
-    
-    // Filter by accountId
-    let filtered = sessionsArray.filter(
-      s => s.accountId === parseInt(accountId, 10)
-    );
-
-    // Filter by gameType if provided
-    if (gameType) {
-      filtered = filtered.filter(s => s.gameType === gameType);
-    }
-
-    // Get specific session if sessionId provided
     if (sessionId) {
-      const session = filtered.find(
-        s => s.id === parseInt(sessionId, 10)
-      );
+      // Get specific session
+      const sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
+      const session = sessions.find(s => s.id === parseInt(sessionId, 10));
       return NextResponse.json({ session: session || null }, { status: 200 });
     }
 
-    // Return all sessions
-    return NextResponse.json({ sessions: filtered }, { status: 200 });
+    if (accountId && gameType) {
+      // Get all sessions for account and game type
+      const sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
+      const filteredSessions = sessions.filter(
+        s => s.accountId === parseInt(accountId, 10) && s.gameType === gameType
+      );
+      
+      // Return only id, sessionName, and lastUpdated
+      const sessionList = filteredSessions.map(s => ({
+        id: s.id,
+        sessionName: s.sessionName,
+        lastUpdated: s.lastUpdated,
+      }));
+      
+      return NextResponse.json({ sessions: sessionList }, { status: 200 });
+    }
+
+    return NextResponse.json(
+      { error: 'accountId and gameType are required' },
+      { status: 400 }
+    );
   } catch (error) {
     console.error('Error reading game sessions:', error);
     return NextResponse.json(
@@ -137,95 +60,70 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Save or update game session
+// POST: Create or update game session
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { 
-      accountId, 
-      gameType, 
-      sessionName, 
-      setup, 
-      players, 
-      gameHistory,
-      sessionId 
-    } = body;
+    const { accountId, gameType, sessionName, setup, players, gameHistory, sessionId } = body;
 
-    if (!accountId || !gameType || !sessionName) {
+    if (!accountId || !gameType || !sessionName || !setup || !players || !gameHistory) {
       return NextResponse.json(
-        { error: 'accountId, gameType, and sessionName are required' },
+        { error: 'All fields are required' },
         { status: 400 }
       );
     }
 
-    const workbook = readExcelFile();
-    
-    // Ensure game_sessions sheet exists
-    if (!workbook.Sheets[GAME_SESSIONS_SHEET_NAME]) {
-      const gameSessionsSheet = XLSX.utils.json_to_sheet<GameSession>([]);
-      XLSX.utils.book_append_sheet(workbook, gameSessionsSheet, GAME_SESSIONS_SHEET_NAME);
+    const sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
+
+    // Initialize headers if sheet is new
+    if (sessions.length === 0) {
+      await setSheetHeaders(GAME_SESSIONS_SHEET_NAME, [
+        'id', 'accountId', 'gameType', 'sessionName', 'setup', 'players', 
+        'gameHistory', 'lastUpdated', 'createdAt'
+      ]);
     }
 
-    const sheet = workbook.Sheets[GAME_SESSIONS_SHEET_NAME];
-    
-    const sessionsArray = sheet
-      ? XLSX.utils.sheet_to_json<GameSession>(sheet)
-      : [];
-
     const now = new Date().toISOString();
-    let savedSession: GameSession;
 
     if (sessionId) {
       // Update existing session
-      const existingIndex = sessionsArray.findIndex(
-        s => s.id === parseInt(sessionId, 10) && s.accountId === accountId
-      );
-
-      if (existingIndex >= 0) {
-        sessionsArray[existingIndex] = {
-          ...sessionsArray[existingIndex],
+      const sessionExists = sessions.find(s => s.id === parseInt(sessionId, 10));
+      if (sessionExists) {
+        const updatedSession: Partial<GameSession> = {
           sessionName,
-          setup: JSON.stringify(setup),
-          players: JSON.stringify(players),
-          gameHistory: JSON.stringify(gameHistory),
+          setup,
+          players,
+          gameHistory,
           lastUpdated: now,
         };
-        savedSession = sessionsArray[existingIndex];
-      } else {
-        return NextResponse.json(
-          { error: 'Session not found' },
-          { status: 404 }
-        );
+        await updateSheetRowById(GAME_SESSIONS_SHEET_NAME, 'id', parseInt(sessionId, 10), updatedSession);
+        
+        const updatedSessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
+        const session = updatedSessions.find(s => s.id === parseInt(sessionId, 10));
+        return NextResponse.json({ session: session || null }, { status: 200 });
       }
-    } else {
-      // Create new session
-      const nextId =
-        sessionsArray.length > 0
-          ? Math.max(...sessionsArray.map(s => s.id)) + 1
-          : 1;
-      
-      const newSession: GameSession = {
-        id: nextId,
-        accountId,
-        gameType,
-        sessionName,
-        setup: JSON.stringify(setup),
-        players: JSON.stringify(players),
-        gameHistory: JSON.stringify(gameHistory),
-        lastUpdated: now,
-        createdAt: now,
-      };
-
-      sessionsArray.push(newSession);
-      savedSession = newSession;
     }
 
-    // Update sheet
-    const newSheet = XLSX.utils.json_to_sheet(sessionsArray);
-    workbook.Sheets[GAME_SESSIONS_SHEET_NAME] = newSheet;
-    writeExcelFile(workbook);
+    // Create new session
+    const nextId = sessions.length > 0 
+      ? Math.max(...sessions.map(s => s.id)) + 1 
+      : 1;
 
-    return NextResponse.json({ session: savedSession }, { status: 200 });
+    const newSession: GameSession = {
+      id: nextId,
+      accountId: parseInt(accountId, 10),
+      gameType,
+      sessionName,
+      setup,
+      players,
+      gameHistory,
+      lastUpdated: now,
+      createdAt: now,
+    };
+
+    await addSheetRow(GAME_SESSIONS_SHEET_NAME, newSession);
+
+    return NextResponse.json({ session: newSession }, { status: 201 });
   } catch (error) {
     console.error('Error saving game session:', error);
     return NextResponse.json(
@@ -235,41 +133,31 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE: Delete a game session
+// DELETE: Delete game session
 export async function DELETE(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
+    const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get('sessionId');
-    const accountId = searchParams.get('accountId');
 
-    if (!sessionId || !accountId) {
+    if (!sessionId) {
       return NextResponse.json(
-        { error: 'sessionId and accountId are required' },
+        { error: 'sessionId is required' },
         { status: 400 }
       );
     }
 
-    const workbook = readExcelFile();
-    const sheet = workbook.Sheets[GAME_SESSIONS_SHEET_NAME];
-    
-    if (!sheet) {
-      return NextResponse.json(
-        { error: 'No sessions found' },
-        { status: 404 }
-      );
+    const sessions = await getSheetRows<GameSession>(GAME_SESSIONS_SHEET_NAME);
+    const sessionExists = sessions.find(s => s.id === parseInt(sessionId, 10));
+
+    if (sessionExists) {
+      await deleteSheetRowById(GAME_SESSIONS_SHEET_NAME, 'id', parseInt(sessionId, 10));
+      return NextResponse.json({ success: true }, { status: 200 });
     }
 
-    const sessionsArray = XLSX.utils.sheet_to_json<GameSession>(sheet);
-    const filtered = sessionsArray.filter(
-      s => !(s.id === parseInt(sessionId, 10) && s.accountId === parseInt(accountId, 10))
+    return NextResponse.json(
+      { error: 'Session not found' },
+      { status: 404 }
     );
-
-    // Update sheet
-    const newSheet = XLSX.utils.json_to_sheet(filtered);
-    workbook.Sheets[GAME_SESSIONS_SHEET_NAME] = newSheet;
-    writeExcelFile(workbook);
-
-    return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
     console.error('Error deleting game session:', error);
     return NextResponse.json(
@@ -278,4 +166,3 @@ export async function DELETE(request: NextRequest) {
     );
   }
 }
-

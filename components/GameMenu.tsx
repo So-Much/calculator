@@ -16,7 +16,6 @@ interface GameButton {
   color: string;
   gradient: string;
   icon: string;
-  component?: React.ComponentType;
 }
 
 const games: GameButton[] = [
@@ -26,7 +25,6 @@ const games: GameButton[] = [
     color: 'from-blue-500 to-blue-600',
     gradient: 'bg-gradient-to-br from-blue-500 to-blue-600',
     icon: '🃏',
-    component: TienLenCalculator,
   },
   {
     id: 'xi-dach',
